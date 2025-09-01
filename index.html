@@ -1,0 +1,45 @@
+{% extends "layout.html" %}
+{% block content %}
+<div class="row">
+  <div class="col-md-8">
+    <div class="card mb-3">
+      <div class="card-body">
+        <h5 class="card-title">What is a Digital Signature?</h5>
+        <p class="card-text">A digital signature guarantees integrity and authenticity of a file. Windows uses signatures to display the publisher and warn users about untrusted software.</p>
+      </div>
+    </div>
+
+    <div class="card mb-3">
+      <div class="card-body">
+        <h5 class="card-title">What is a Digital Certificate?</h5>
+        <p class="card-text">A certificate binds a public key to the publisher identity (CN, O, OU). Certificates are issued by CAs or can be self-signed for internal testing.</p>
+      </div>
+    </div>
+
+    <div class="card mb-3">
+      <div class="card-body">
+        <h5 class="card-title">Signing Process (Self-signed)</h5>
+        <ol>
+          <li>Generate a private key & self-signed certificate using OpenSSL.</li>
+          <li>Export certificate to password-protected .pfx.</li>
+          <li>Sign executables with SignTool (SHA-256) and add a timestamp.</li>
+          <li>Verify signatures.</li>
+        </ol>
+        <p class="text-danger"><strong>Note:</strong> self-signed certificates are not trusted by default. Install root cert or use CA-issued cert for production.</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-md-4">
+    <div class="card mb-3 p-3">
+      <h6>Quick Actions</h6>
+      <a class="btn btn-primary w-100 my-1" href="{{ url_for('certs') }}">Manage Certificates</a>
+      <a class="btn btn-secondary w-100 my-1" href="{{ url_for('files_page') }}">Upload & Sign Files</a>
+      <a class="btn btn-info w-100 my-1" href="{{ url_for('logs_page') }}">View Logs</a>
+      {% if not user %}
+        <a class="btn btn-outline-primary w-100 my-1" href="{{ url_for('login') }}">Login</a>
+      {% endif %}
+    </div>
+  </div>
+</div>
+{% endblock %}

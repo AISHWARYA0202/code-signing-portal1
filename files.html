@@ -1,0 +1,75 @@
+{% extends "layout.html" %}
+{% block content %}
+<h3>Files</h3>
+
+<div class="card mb-3 p-3">
+  <h5>Upload Files</h5>
+  <form action="{{ url_for('files_upload') }}" method="post" enctype="multipart/form-data">
+    <input class="form-control" type="file" name="files" multiple required>
+    <button class="btn btn-primary mt-2">Upload</button>
+  </form>
+</div>
+
+<div class="card mb-3 p-3">
+  <h5>Sign / Verify</h5>
+  <form method="post" action="{{ url_for('files_sign') }}">
+    <div class="mb-2">
+      <label class="form-label">Select Certificate</label>
+      <select name="cert_id" class="form-select" required>
+        {% for c in certs %}
+          <option value="{{ c._id }}">{{ c.cn }} ({{ c.valid_to }})</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="mb-2">
+      <input class="form-control" name="pfx_password" type="password" placeholder="PFX password" required>
+    </div>
+    <div>
+      <label class="form-label">Select files to sign</label>
+      <div class="mb-2">
+        {% for f in files %}
+          <div class="form-check">
+            <input class="form-check-input" type="checkbox" name="selected_files" value="{{ f.filename }}" checked>
+            <label class="form-check-label">{{ f.filename }} - {{ f.status }}</label>
+          </div>
+        {% endfor %}
+      </div>
+    </div>
+    <button class="btn btn-success">Sign Selected</button>
+  </form>
+
+  <form method="post" action="{{ url_for('files_verify') }}" class="mt-3">
+    <label class="form-label">Select files to verify</label>
+    <div>
+      {% for f in files %}
+        <div class="form-check">
+          <input class="form-check-input" type="checkbox" name="selected_files" value="{{ f.filename }}" checked>
+          <label class="form-check-label">{{ f.filename }}</label>
+        </div>
+      {% endfor %}
+    </div>
+    <button class="btn btn-secondary mt-2">Verify Selected</button>
+  </form>
+</div>
+
+<div class="card">
+  <div class="card-body">
+    <h5>Uploaded Files</h5>
+    <table class="table">
+      <thead><tr><th>Filename</th><th>Status</th><th>Uploaded</th><th>Action</th></tr></thead>
+      <tbody>
+        {% for f in files %}
+        <tr>
+          <td><a href="{{ url_for('download_upload', filename=f.filename) }}">{{ f.filename }}</a></td>
+          <td>{{ f.status }}</td>
+          <td>{{ f.uploaded_at }}</td>
+          <td>
+            <a class="btn btn-sm btn-outline-primary" href="{{ url_for('download_upload', filename=f.filename) }}">Download</a>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

@@ -1,0 +1,45 @@
+{% extends "layout.html" %}
+{% block content %}
+<h3>Certificates</h3>
+
+<div class="card mb-3 p-3">
+  <h5>Generate Self-Signed Certificate (Admin)</h5>
+  <form method="post" action="{{ url_for('certs_generate') }}">
+    <div class="row g-2">
+      <div class="col"><input class="form-control" name="CN" placeholder="Common Name (CN)" required></div>
+      <div class="col"><input class="form-control" name="O" placeholder="Organization (O)"></div>
+    </div>
+    <div class="row g-2 mt-2">
+      <div class="col"><input class="form-control" name="OU" placeholder="Organizational Unit (OU)"></div>
+      <div class="col"><input class="form-control" name="days" placeholder="Validity days" value="730"></div>
+    </div>
+    <div class="row g-2 mt-2">
+      <div class="col"><input class="form-control" name="pfx_password" type="password" placeholder="PFX password" required></div>
+      <div class="col"><button class="btn btn-success w-100">Generate</button></div>
+    </div>
+  </form>
+</div>
+
+<div class="card">
+  <div class="card-body">
+    <h5>Available Certificates</h5>
+    <table class="table">
+      <thead><tr><th>CN</th><th>Valid From</th><th>Valid To</th><th>Created By</th><th>Actions</th></tr></thead>
+      <tbody>
+        {% for c in certs %}
+        <tr>
+          <td>{{ c.cn }}</td>
+          <td>{{ c.valid_from }}</td>
+          <td>{{ c.valid_to }}</td>
+          <td>{{ c.created_by }}</td>
+          <td>
+            <a class="btn btn-sm btn-outline-primary" href="{{ url_for('certs_download', id=c._id, kind='crt') }}">Download CRT</a>
+            <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('certs_download', id=c._id, kind='pfx') }}">Download PFX</a>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}
