@@ -1,0 +1,48 @@
+{% extends "layout.html" %}
+{% block content %}
+<h3>Verify File Integrity</h3>
+
+<!-- Collapsible Info Card -->
+<div class="card mb-3">
+  <div class="card-header" data-bs-toggle="collapse" data-bs-target="#integrity-info" style="cursor: pointer;">
+    <h5 class="mb-0">What is File Integrity? (Click to expand)</h5>
+  </div>
+  <div id="integrity-info" class="collapse">
+    <div class="card-body">
+      <p>
+        File integrity ensures that a file has not been modified after it was signed.
+        SHA-256 checksums are calculated for the original uploaded file and after signing.
+        By comparing these checksums, you can verify whether a file has been altered.
+      </p>
+    </div>
+  </div>
+</div>
+
+<!-- Compare Local File Against Signed File -->
+<div class="card mb-3 p-3">
+  <h5>Compare a Local File Against Signed File</h5>
+  <form action="{{ url_for('files_compare') }}" method="post" enctype="multipart/form-data">
+    <div class="mb-2">
+      <label class="form-label">Select Local File</label>
+      <input class="form-control" type="file" name="local_file" required>
+    </div>
+    <div class="mb-2">
+      <label class="form-label">Select Signed File to Compare</label>
+      <select name="signed_filename" class="form-select" required>
+        {% for f in signed_files %}
+          <option value="{{ f.filename }}">{{ f.filename }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <button type="submit" class="btn btn-warning">Compare Checksums</button>
+  </form>
+</div>
+
+{% if comparison_result %}
+<div class="card mb-3 p-3">
+  <h5>Comparison Result</h5>
+  <p>{{ comparison_result }}</p>
+</div>
+{% endif %}
+
+{% endblock %}
