@@ -1,4 +1,4 @@
-import os, json
+import os, json, hashlib
 from datetime import datetime
 from flask import Flask, render_template, request, redirect, url_for, flash, session, send_from_directory
 from werkzeug.utils import secure_filename
@@ -26,6 +26,15 @@ logs_col = mongo.db.logs
 if users.count_documents({}) == 0:
     users.insert_one({'username':'admin','password_hash':generate_password_hash('admin'),'role':'admin','created_at':datetime.utcnow().isoformat()})
     print('Default admin created: admin/admin')
+
+# ------------------- Helper -------------------
+def compute_sha256(path):
+    """Compute SHA-256 hash of a file at given path."""
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(8192), b""):
+            h.update(chunk)
+    return h.hexdigest()
 
 def current_user():
     uname = session.get('username')
@@ -164,7 +173,10 @@ def certs_download(id, kind):
 @login_required
 def files_page():
     u = current_user()
-    uploaded = list(files_col.find({}).sort('uploaded_at', -1))
+    if u.get('role') == 'admin':
+        uploaded = list(files_col.find({}).sort('uploaded_at', -1))
+    else:
+        uploaded = list(files_col.find({'uploader': u['username']}).sort('uploaded_at', -1))
     certs_list = list(certs_col.find({})) if u.get('role')=='admin' else list(certs_col.find({'created_by': u['username']}))
     return render_template('files.html', files=uploaded, certs=certs_list, user=u)
 
@@ -176,16 +188,28 @@ def files_upload():
     for f in filesx:
         if not f or f.filename=='': continue
         filename = secure_filename(f.filename)
-        dest = os.path.join(UPLOAD_DIR, filename); f.save(dest)
+        dest = os.path.join(UPLOAD_DIR, filename)
+        f.save(dest)
+
+        checksum_orig = compute_sha256(dest)
+
         files_col.insert_one({
-            'filename':filename,
-            'uploader':u['username'],
-            'status':'uploaded',
-            'uploaded_at':datetime.utcnow().isoformat()
+            'filename': filename,
+            'uploader': u['username'],
+            'status': 'uploaded',
+            'uploaded_at': datetime.utcnow().isoformat(),
+            'checksum_original': checksum_orig
         })
-        logs_col.insert_one({'username':u['username'],'action':'upload','filename':filename,'timestamp':datetime.utcnow().isoformat()})
+
+        logs_col.insert_one({
+            'username': u['username'],
+            'action': 'upload',
+            'filename': filename,
+            'timestamp': datetime.utcnow().isoformat()
+        })
         saved.append(filename)
-    flash('Uploaded: '+', '.join(saved) if saved else 'No files uploaded'); return redirect(url_for('files_page'))
+    flash('Uploaded: '+', '.join(saved) if saved else 'No files uploaded')
+    return redirect(url_for('files_page'))
 
 @app.route('/files/sign', methods=['POST'])
 @login_required
@@ -199,29 +223,55 @@ def files_sign():
     if not cert_doc: flash('Select a certificate'); return redirect(url_for('files_page'))
 
     u = current_user()
-    # Users can only use their own certificates
     if u.get('role')!='admin' and cert_doc['created_by'] != u['username']:
         flash('You can only use your own certificates'); return redirect(url_for('files_page'))
 
     results=[]
     for fname in selected:
         path = os.path.join(UPLOAD_DIR, fname)
-        if not os.path.exists(path): results.append(f'❌ {fname}: not found'); continue
+        if not os.path.exists(path):
+            results.append(f'❌ {fname}: not found'); continue
+
+        if u.get('role')!='admin':
+            file_doc = files_col.find_one({'filename': fname})
+            if not file_doc or file_doc.get('uploader') != u['username']:
+                results.append(f'❌ {fname}: you can only sign files you uploaded')
+                continue
+
         ok,out = signer.sign_file(cert_doc['pfx_path'], pfx_password, path)
-        results.append(('✅' if ok else '❌')+f' Sign {fname}:\n{out}')
-        files_col.update_one({'filename':fname},{"$set":{
-            'status':'signed' if ok else 'failed',
-            'signed_at':datetime.utcnow().isoformat(),
-            'signed_with':cert_doc['_id']
-        }})
+
+        # Compute signed checksum
+        signed_path = path
+        if ok:
+            if isinstance(out, dict) and out.get('signed_path'):
+                signed_path = out.get('signed_path')
+            elif isinstance(out, str) and os.path.exists(out):
+                signed_path = out
+
+        checksum_signed = compute_sha256(signed_path) if os.path.exists(signed_path) else None
+
+        update_fields = {
+            'status': 'signed' if ok else 'failed',
+            'signed_at': datetime.utcnow().isoformat(),
+            'signed_with': cert_doc['_id']
+        }
+        if checksum_signed:
+            update_fields['checksum_signed'] = checksum_signed
+
+        files_col.update_one({'filename': fname}, {"$set": update_fields})
+
         logs_col.insert_one({
-            'username':u['username'],
-            'action':'sign',
-            'filename':fname,
-            'cert_cn':cert_doc['cn'],
-            'success':ok,
-            'timestamp':datetime.utcnow().isoformat()
+            'username': u['username'],
+            'action': 'sign',
+            'filename': fname,
+            'cert_cn': cert_doc['cn'],
+            'success': ok,
+            'timestamp': datetime.utcnow().isoformat(),
+            'checksum_signed': checksum_signed if ok else None
         })
+
+        results.append(('✅' if ok else '❌')+f' Sign {fname}:\n{out}')
+
     for r in results: flash(r)
     return redirect(url_for('files_page'))
 
@@ -233,16 +283,40 @@ def files_verify():
     u = current_user()
     for fname in selected:
         path = os.path.join(UPLOAD_DIR, fname)
-        if not os.path.exists(path): results.append(f'❌ {fname}: not found'); continue
+        if not os.path.exists(path):
+            results.append(f'❌ {fname}: not found'); continue
+
+        if u.get('role')!='admin':
+            file_doc = files_col.find_one({'filename': fname})
+            if not file_doc or file_doc.get('uploader') != u['username']:
+                results.append(f'❌ {fname}: you can only verify files you uploaded')
+                continue
+
         ok,out = signer.verify_file(path)
-        results.append(('✅' if ok else '❌')+f' Verify {fname}:\n{out}')
+
+        # Checksum verification
+        file_doc = files_col.find_one({'filename': fname})
+        current_hash = compute_sha256(path)
+        expected_hash = file_doc.get('checksum_signed') if file_doc.get('status')=='signed' else file_doc.get('checksum_original')
+
+        if expected_hash:
+            checksum_ok = current_hash.lower() == expected_hash.lower()
+            checksum_msg = ' | Checksum OK' if checksum_ok else f' | Checksum MISMATCH (expected {expected_hash[:12]}..., got {current_hash[:12]}...)'
+        else:
+            checksum_ok = False
+            checksum_msg = ' | No stored checksum to compare'
+
+        results.append(('✅' if ok else '❌')+f' Verify {fname}:\n{out}' + checksum_msg)
+
         logs_col.insert_one({
-            'username':u['username'],
-            'action':'verify',
-            'filename':fname,
-            'success':ok,
-            'timestamp':datetime.utcnow().isoformat()
+            'username': u['username'],
+            'action': 'verify',
+            'filename': fname,
+            'success': ok,
+            'checksum_ok': checksum_ok,
+            'timestamp': datetime.utcnow().isoformat()
         })
+
     for r in results: flash(r)
     return redirect(url_for('files_page'))
 
@@ -252,7 +326,6 @@ def files_verify():
 @admin_required
 def logs_page():
     q = list(logs_col.find({}).sort('timestamp', -1).limit(500))
-    # Convert ObjectId fields to strings
     for log in q:
         log['_id'] = str(log['_id'])
         if 'signed_with' in log:
@@ -264,7 +337,100 @@ def logs_page():
 @app.route('/uploads/<path:filename>')
 @login_required
 def download_upload(filename):
+    u = current_user()
+    if u.get('role') != 'admin':
+        file_doc = files_col.find_one({'filename': filename})
+        if not file_doc or file_doc.get('uploader') != u['username']:
+            flash('You can only download files you uploaded')
+            return redirect(url_for('files_page'))
     return send_from_directory(UPLOAD_DIR, filename, as_attachment=True)
+
+@app.route('/files/compare', methods=['POST'])
+@login_required
+def files_compare():
+    local_file = request.files.get('local_file')
+    signed_filename = request.form.get('signed_filename')
+    results = []
+    u = current_user()
+
+    if not local_file or not signed_filename:
+        flash('Please select both local file and signed file'); 
+        return redirect(url_for('files_page'))
+
+    # Save uploaded local file temporarily
+    temp_path = os.path.join(UPLOAD_DIR, f"temp_{secure_filename(local_file.filename)}")
+    local_file.save(temp_path)
+    local_hash = compute_sha256(temp_path)
+
+    # Fetch the signed file info
+    file_doc = files_col.find_one({'filename': signed_filename})
+    if not file_doc:
+        flash('Selected signed file not found'); 
+        os.remove(temp_path)
+        return redirect(url_for('files_page'))
+
+    expected_hash = file_doc.get('checksum_signed')
+    if not expected_hash:
+        flash('Signed checksum not available for this file'); 
+        os.remove(temp_path)
+        return redirect(url_for('files_page'))
+
+    # Compare
+    if local_hash.lower() == expected_hash.lower():
+        flash(f'✅ Local file matches signed checksum for {signed_filename}')
+    else:
+        flash(f'❌ MISMATCH! Local file does not match signed checksum of {signed_filename} '
+              f'(expected {expected_hash[:12]}..., got {local_hash[:12]}...)')
+
+    # Clean up temp file
+    os.remove(temp_path)
+    return redirect(url_for('files_page'))
+
+@app.route('/verify-integrity')
+@login_required
+def verify_integrity_page():
+    u = current_user()
+    # Show only signed files user can access
+    if u.get('role') == 'admin':
+        signed_files = list(files_col.find({'status':'signed'}))
+    else:
+        signed_files = list(files_col.find({'status':'signed','uploader': u['username']}))
+    return render_template('verify_integrity.html', signed_files=signed_files, user=u)
+
+@app.route('/verify-integrity', methods=['POST'])
+@login_required
+def verify_integrity():
+    u = current_user()
+    local_file = request.files.get('local_file')
+    signed_filename = request.form.get('signed_filename')
+
+    if not local_file or not signed_filename:
+        flash('Please select a local file and a signed file.')
+        return redirect(url_for('verify_integrity_page'))
+
+    # Save local file temporarily
+    temp_path = os.path.join(UPLOAD_DIR, secure_filename(local_file.filename))
+    local_file.save(temp_path)
+
+    # Get signed file from DB
+    signed_doc = files_col.find_one({'filename': signed_filename})
+    if not signed_doc or signed_doc.get('status') != 'signed':
+        flash('Signed file not found.')
+        os.remove(temp_path)
+        return redirect(url_for('verify_integrity_page'))
+
+    # Compute SHA-256 hashes
+    local_hash = compute_sha256(temp_path)
+    signed_hash = signed_doc.get('checksum_signed') or signed_doc.get('checksum_original')
+
+    if local_hash.lower() == signed_hash.lower():
+        flash(f'✅ Integrity OK! Hash: {local_hash[:16]}...')
+    else:
+        flash(f'❌ Integrity MISMATCH! Local: {local_hash[:16]}..., Expected: {signed_hash[:16]}...')
+
+    os.remove(temp_path)
+    return redirect(url_for('verify_integrity_page'))
+
 
 # ------------------- Main -------------------
 
